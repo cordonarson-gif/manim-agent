@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local secrets
+.env
+.env.*
+
+# Runtime artifacts
+media/
+logs/
+*.jsonl
+experiment_results*.csv
+
+# Temporary scripts and caches
+temp.py
+temp_scene.py
+temp_generated_scene.py
+.pytest_cache/
+.tools/
+
+# Chainlit local generated content
+.chainlit/translations/
+
+# OS / editor
+.DS_Store
+Thumbs.db
