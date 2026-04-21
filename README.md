@@ -75,10 +75,10 @@ coder <- feedback <- ast_reviewer / execution / vision_critic
 
 ## Download
 
-After the repository is published to GitHub, clone it with:
+Clone it with:
 
 ```bash
-git clone https://github.com/<your-github-username>/manim-agent.git
+git clone https://github.com/cordonarson-gif/manim-agent.git
 cd manim-agent
 ```
 
