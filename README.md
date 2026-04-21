@@ -1,22 +1,49 @@
 # manim-agent
 
-An EI-grade dual-feedback pipeline for automated Manim teaching content generation.
+> Multi-agent dual-feedback pipeline for automated Manim teaching content generation.  
+> 面向 Manim 教学动画自动生成的多智能体双反馈系统。
 
-`manim-agent` is a multi-agent workflow built on LangGraph for generating, reviewing, rendering, and revising Manim teaching animations from natural-language prompts.
+`manim-agent` is a LangGraph-based workflow that turns natural-language teaching requests into storyboard plans, Manim code, rendered media, and visual feedback-driven revisions. It is designed for educational animation generation with a closed repair loop across code review and vision review.
 
-## Overview
+`manim-agent` 是一个基于 LangGraph 的多智能体工作流，能够将自然语言教学需求转换为分镜规划、Manim 代码、渲染结果，并通过代码审查与视觉审查闭环迭代修复，更适合教学动画生成场景。
 
-This project splits Manim content generation into several specialized agents and lets them collaborate in a closed loop:
+## Highlights | 项目亮点
 
-- `planner`: turns a teaching request into storyboard JSON
-- `coder`: generates or repairs Manim code
-- `ast_reviewer`: checks syntax, safety, and scene contract
-- `execution`: renders image/video artifacts in a sandboxed run directory
-- `vision_critic`: reviews the rendered frame and returns visual feedback
+- `Dual feedback loop`: combines AST/static review and visual critique to improve generation reliability.
+- `双反馈闭环`：同时利用 AST 静态审查和视觉审查，提高动画生成的可执行性与可用性。
 
-The system supports both planning-only and end-to-end generation workflows, with a hard retry cap of `MAX_RETRIES = 5`.
+- `Planner-first workflow`: supports planning-only mode and end-to-end generation mode.
+- `规划优先工作流`：同时支持仅输出分镜的 Planning 模式与完整生成的 Generation 模式。
 
-## Architecture
+- `Agent specialization`: planner, coder, AST reviewer, execution sandbox, and vision critic each focus on one stage.
+- `智能体分工明确`：规划、代码生成、静态检查、执行渲染、视觉评估各司其职。
+
+- `Retry-controlled pipeline`: hard stop at `MAX_RETRIES = 5` to avoid endless loops.
+- `受控重试机制`：通过 `MAX_RETRIES = 5` 限制迭代次数，避免无限循环。
+
+- `Usable interfaces`: supports both CLI usage and Chainlit web interaction.
+- `可直接使用`：同时提供命令行入口和 Chainlit 交互界面。
+
+## Workflow | 工作流
+
+### Agent roles | 智能体角色
+
+- `planner`: converts a teaching request into storyboard JSON.
+- `planner`：将教学需求拆解为分镜 JSON。
+
+- `coder`: generates or repairs Manim code from the task, storyboard, and feedback.
+- `coder`：根据任务、分镜和反馈生成或修复 Manim 代码。
+
+- `ast_reviewer`: checks syntax, safety rules, and `GeneratedScene` contract.
+- `ast_reviewer`：检查语法、安全限制以及 `GeneratedScene` 约束。
+
+- `execution`: renders snapshots and videos in an isolated run directory.
+- `execution`：在独立运行目录中完成截图和视频渲染。
+
+- `vision_critic`: reviews the rendered frame and returns visual/layout feedback.
+- `vision_critic`：分析渲染图像并返回视觉与布局反馈。
+
+### Architecture
 
 ```text
 User Task
@@ -43,67 +70,43 @@ If AST / render / vision review fails:
 coder <- feedback <- ast_reviewer / execution / vision_critic
 ```
 
-## Features
+### Core modes | 核心模式
 
-- Dual-feedback repair loop across code-level review and visual review
-- Planning mode for storyboard generation only
-- Generation mode with iterative repair and render validation
-- CLI entrypoint and Chainlit chat interface
-- Per-run render artifacts under `media/runs`
-- Lightweight experiment logging under `logs/runs`
+- `Planning mode`: runs `planner` only and outputs storyboard JSON.
+- `Planning 模式`：仅运行 `planner`，输出分镜 JSON。
 
-## Project Structure
+- `Generation mode`: runs `coder -> ast_reviewer -> execution -> vision_critic`.
+- `Generation 模式`：运行 `coder -> ast_reviewer -> execution -> vision_critic` 闭环。
 
-```text
-.
-|-- app.py
-|-- main.py
-|-- workflow.py
-|-- state.py
-|-- requirements.txt
-|-- agents/
-|   |-- planner.py
-|   |-- coder.py
-|   |-- ast_reviewer.py
-|   |-- execution.py
-|   `-- vision_critic.py
-`-- utils/
-    |-- experiment_logger.py
-    |-- manim_injector.py
-    `-- model_provider.py
-```
+- If no storyboard exists, the planner runs first and then enters the generation loop.
+- 如果没有现成分镜，系统会先规划，再进入生成与修复循环。
 
-## Download
+## Quick Start | 快速开始
 
-Clone it with:
+### Clone | 下载
 
 ```bash
 git clone https://github.com/cordonarson-gif/manim-agent.git
 cd manim-agent
 ```
 
-You can also download a ZIP package from the GitHub repository page:
+You can also use `Code -> Download ZIP` on the GitHub repository page.  
+也可以在 GitHub 仓库页面使用 `Code -> Download ZIP` 直接下载。
 
-`Code -> Download ZIP`
-
-## Requirements
+### Requirements | 环境要求
 
 - Python 3.10+
 - Manim Community Edition 0.19+
 - FFmpeg available in `PATH`
-- API access for:
-  - DeepSeek chat model
-  - Qwen vision model
+- API access for DeepSeek chat and Qwen vision models
 
-Install Python dependencies:
+### Install | 安装
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Configuration
-
-Set the required environment variables before running the project.
+### Configuration | 环境变量配置
 
 Windows PowerShell:
 
@@ -138,21 +141,7 @@ export MANIM_EXEC_TIMEOUT=120
 export MANIM_ERROR_LIMIT=1800
 ```
 
-## Usage
-
-### 1. Planning mode
-
-Use the `planner` agent only and output storyboard JSON.
-
-### 2. Generation mode
-
-If a storyboard already exists:
-
-```text
-coder -> ast_reviewer -> execution -> vision_critic
-```
-
-If no storyboard exists, the planner runs first and then enters the same generation loop.
+## Usage | 使用方式
 
 ### CLI
 
@@ -172,15 +161,38 @@ python main.py --task "Explain Pythagorean theorem visually" --quiet
 chainlit run app.py
 ```
 
-Note: for long rendering sessions, avoid watch mode because temporary file changes may trigger reloads unexpectedly.
+For long rendering sessions, avoid watch mode because temporary file changes may trigger reloads unexpectedly.  
+对于长时间渲染任务，建议避免 watch 模式，因为临时文件变化可能触发热重载。
 
-## Outputs
+## Project Structure | 项目结构
+
+```text
+.
+|-- app.py
+|-- main.py
+|-- workflow.py
+|-- state.py
+|-- requirements.txt
+|-- agents/
+|   |-- planner.py
+|   |-- coder.py
+|   |-- ast_reviewer.py
+|   |-- execution.py
+|   `-- vision_critic.py
+`-- utils/
+    |-- experiment_logger.py
+    |-- manim_injector.py
+    `-- model_provider.py
+```
+
+## Outputs | 输出结果
 
 - Render artifacts: `media/runs`
-- Latest Manim outputs may also appear under `media/images` and `media/videos`
+- Snapshot or video outputs may also appear in `media/images` and `media/videos`
 - Experiment logs: `logs/runs/*.jsonl`
 
-These folders are runtime artifacts and are normally excluded from Git version control.
+These folders are runtime artifacts and are normally excluded from version control.  
+这些目录属于运行产物，通常不会纳入 Git 版本管理。
 
 ## Tech Stack
 
@@ -190,12 +202,18 @@ These folders are runtime artifacts and are normally excluded from Git version c
 - Manim Community Edition
 - Chainlit
 
-## Notes
+## Notes | 说明
 
-- This repository has been prepared for GitHub publishing by removing hardcoded API secrets.
-- Please keep all model credentials in environment variables and do not commit them into source files.
-- Some files in the current workspace are local runtime outputs and are intentionally ignored when publishing.
+- Hardcoded API keys have been removed before publishing.
+- 仓库公开前已经移除了硬编码 API Key。
+
+- Keep credentials in environment variables instead of source files.
+- 建议将模型密钥保存在环境变量中，而不是源码中。
+
+- Some local runtime outputs are intentionally ignored by `.gitignore`.
+- 一些本地产生的运行结果已经通过 `.gitignore` 排除。
 
 ## License
 
-No license file is included yet. Add one before wider open-source distribution if needed.
+No license file is included yet. Add one before wider open-source distribution if needed.  
+当前仓库暂未附带许可证文件，如计划公开分发，建议补充 `LICENSE`。
