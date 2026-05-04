@@ -1,10 +1,57 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from pathlib import Path
 from typing import Any
+
+SENSITIVE_KEY_PATTERN = re.compile(
+    r"(api[_-]?key|secret|token|password|authorization|bearer|credential|cookie)",
+    re.IGNORECASE,
+)
+SENSITIVE_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}\b"),
+    re.compile(r"\b[A-Za-z0-9_\-]{24,}\.[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]{6,}\b"),
+)
+MAX_LOG_STRING_LENGTH = 500
+
+
+def _redact_string(value: str) -> str:
+    """Redact secret-looking values and cap log string length."""
+
+    redacted = value
+    for pattern in SENSITIVE_VALUE_PATTERNS:
+        redacted = pattern.sub("[REDACTED]", redacted)
+    if len(redacted) > MAX_LOG_STRING_LENGTH:
+        return f"{redacted[:MAX_LOG_STRING_LENGTH]} ...<truncated>"
+    return redacted
+
+
+def _sanitize_for_log(value: Any) -> Any:
+    """Recursively sanitize payload values before writing JSONL logs."""
+
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            safe_key = str(key)
+            if SENSITIVE_KEY_PATTERN.search(safe_key):
+                sanitized[safe_key] = "[REDACTED]"
+            else:
+                sanitized[safe_key] = _sanitize_for_log(item)
+        return sanitized
+
+    if isinstance(value, list):
+        return [_sanitize_for_log(item) for item in value[:20]]
+
+    if isinstance(value, tuple):
+        return tuple(_sanitize_for_log(item) for item in value[:20])
+
+    if isinstance(value, str):
+        return _redact_string(value)
+
+    return value
 
 
 class ExperimentLogger:
@@ -28,7 +75,7 @@ class ExperimentLogger:
             "ts": time.time(),
             "run_id": self.run_id,
             "event_type": event_type,
-            "payload": payload or {},
+            "payload": _sanitize_for_log(payload or {}),
         }
         try:
             line = json.dumps(event, ensure_ascii=False)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import queue
 import threading
@@ -156,6 +157,14 @@ def _short_text(text: str, limit: int = 1600) -> str:
     if len(clean) <= limit:
         return clean
     return f"{clean[:limit]} ...<truncated>"
+
+
+def _task_log_metadata(text: str) -> dict[str, Any]:
+    """Create non-content task metadata for privacy-preserving logs."""
+
+    clean = text.strip()
+    digest = hashlib.sha256(clean.encode("utf-8")).hexdigest() if clean else None
+    return {"task_length": len(clean), "task_sha256": digest}
 
 
 def _is_generation_control_command(text: str) -> bool:
@@ -344,15 +353,24 @@ def _node_summary(node_name: str, node_update: dict[str, Any]) -> dict[str, Any]
         return summary
     if node_name == "coder":
         summary["code_length"] = len(str(node_update.get("code", "")))
+        summary["coder_input_mode"] = node_update.get("coder_input_mode")
+        summary["coder_storyboard_used"] = node_update.get("coder_storyboard_used")
         return summary
     if node_name == "ast_reviewer":
-        summary["ast_error"] = node_update.get("ast_error")
+        ast_error = node_update.get("ast_error")
+        summary["ast_error"] = _short_text(str(ast_error), 500) if ast_error else None
         return summary
     if node_name == "execution":
-        summary["render_error"] = node_update.get("render_error")
+        render_error = node_update.get("render_error")
+        summary["render_error"] = _short_text(str(render_error), 500) if render_error else None
+        summary["failure_type"] = node_update.get("failure_type")
+        summary["execution_environment"] = node_update.get("execution_environment")
         return summary
     if node_name == "vision_critic":
-        summary["vision_error"] = node_update.get("vision_error")
+        vision_error = node_update.get("vision_error")
+        summary["vision_error"] = _short_text(str(vision_error), 500) if vision_error else None
+        summary["vision_verdict"] = node_update.get("vision_verdict")
+        summary["vision_severity"] = node_update.get("vision_severity")
         return summary
     summary["raw"] = str(node_update)[:500]
     return summary
@@ -369,6 +387,19 @@ def _reset_run_fields(state: AgentState) -> None:
     state["render_media_dir"] = None
     state["render_image_path"] = None
     state["render_video_path"] = None
+    state["failure_stage"] = None
+    state["failure_type"] = None
+    state["final_verdict"] = "unknown"
+    state["success_reason"] = None
+    state["failure_reason"] = None
+    state["vision_skipped"] = False
+    state["vision_verdict"] = None
+    state["vision_severity"] = None
+    state["vision_issue_count"] = 0
+    state["storyboard_present"] = bool(state.get("storyboard"))
+    state["coder_input_mode"] = "unknown"
+    state["coder_storyboard_used"] = False
+    state["retry_count_reason"] = "coder attempt count"
 
 
 @cl.on_chat_start
@@ -428,7 +459,7 @@ async def on_message(message: cl.Message) -> None:
     logger = ExperimentLogger()
     logger.log(
         "request_received",
-        {"mode": mode, "task_preview": user_text[:200], "has_storyboard": bool(state.get("storyboard"))},
+        {"mode": mode, **_task_log_metadata(user_text), "has_storyboard": bool(state.get("storyboard"))},
     )
 
     existing_storyboard = bool(state.get("storyboard"))
@@ -526,6 +557,12 @@ async def on_message(message: cl.Message) -> None:
                 "artifact_type": "video",
                 "artifact_path": str(latest_video),
                 "retry_count": state.get("retry_count"),
+                "final_verdict": state.get("final_verdict"),
+                "failure_stage": state.get("failure_stage"),
+                "failure_type": state.get("failure_type"),
+                "success_reason": state.get("success_reason"),
+                "failure_reason": state.get("failure_reason"),
+                "execution_environment": state.get("execution_environment"),
             },
         )
         progress_msg.content = "Generation finished. Video has been created."
@@ -551,6 +588,12 @@ async def on_message(message: cl.Message) -> None:
                 "artifact_type": "image",
                 "artifact_path": str(latest_image),
                 "retry_count": state.get("retry_count"),
+                "final_verdict": state.get("final_verdict"),
+                "failure_stage": state.get("failure_stage"),
+                "failure_type": state.get("failure_type"),
+                "success_reason": state.get("success_reason"),
+                "failure_reason": state.get("failure_reason"),
+                "execution_environment": state.get("execution_environment"),
             },
         )
         progress_msg.content = "Generation finished. No new mp4 found, showing latest frame."
@@ -562,7 +605,16 @@ async def on_message(message: cl.Message) -> None:
 
     logger.log(
         "generation_finished",
-        {"artifact_type": "none", "retry_count": state.get("retry_count")},
+        {
+            "artifact_type": "none",
+            "retry_count": state.get("retry_count"),
+            "final_verdict": state.get("final_verdict"),
+            "failure_stage": state.get("failure_stage"),
+            "failure_type": state.get("failure_type"),
+            "success_reason": state.get("success_reason"),
+            "failure_reason": state.get("failure_reason"),
+            "execution_environment": state.get("execution_environment"),
+        },
     )
     progress_msg.content = "Generation finished, but no new artifact was found."
     await progress_msg.update()

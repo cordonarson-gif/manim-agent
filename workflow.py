@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from langgraph.graph import END, StateGraph
 
@@ -14,33 +14,80 @@ from state import AgentState, MAX_RETRIES
 GenerateRoute = Literal["to_coder", "to_execution", "to_vision", "finish"]
 
 
+def _current_retry_count(state: AgentState) -> int:
+    """Read retry count defensively."""
+
+    try:
+        return int(state.get("retry_count", 0))
+    except Exception:
+        return MAX_RETRIES
+
+
 def _should_force_end(state: AgentState) -> bool:
     """Hard-stop guard to prevent infinite retry loops."""
 
-    try:
-        return int(state.get("retry_count", 0)) >= MAX_RETRIES
-    except Exception:
+    return _current_retry_count(state) >= MAX_RETRIES
+
+
+def _is_vision_passed(state: AgentState) -> bool:
+    """Vision stage passes when structured verdict accepts the output."""
+
+    verdict = str(state.get("vision_verdict", "") or "").strip().upper()
+    severity = str(state.get("vision_severity", "") or "").strip().lower()
+    vision_error = state.get("vision_error")
+
+    if verdict == "OK":
+        return True
+    if vision_error is None and verdict in {"", "OK"}:
+        return True
+    if verdict == "REVISE" and severity == "low":
+        return True
+    return False
+
+
+def _is_minor_vision_issue(state: AgentState) -> bool:
+    """Detect low-severity vision feedback using structured state first."""
+
+    severity = state.get("vision_severity")
+    if isinstance(severity, str) and severity.strip().lower() == "low":
         return True
 
-
-def _is_vision_passed(vision_error: str | None) -> bool:
-    """Vision stage passes when feedback is None or explicit OK."""
-
-    if vision_error is None:
-        return True
-    return vision_error.strip().upper() == "OK"
-
-
-def _is_minor_vision_issue(vision_error: str | None) -> bool:
-    """Best-effort detector for low-severity vision feedback."""
-
+    vision_error = state.get("vision_error")
     if vision_error is None:
         return False
-    text = vision_error.strip().lower()
+    text = str(vision_error).strip().lower()
     if not text:
         return False
-    minor_tokens = ["severity\": \"low", "severity: low", "minor", "轻微", "low"]
+    minor_tokens = ["\"severity\": \"low\"", "severity: low", "minor", "轻微", "low severity"]
     return any(token in text for token in minor_tokens)
+
+
+def _is_infra_failure(state: AgentState, stage: str) -> bool:
+    """Check whether current failure was classified as infrastructure-related."""
+
+    return state.get("failure_stage") == stage and state.get("failure_type") == "infra"
+
+
+def _success_patch(reason: str) -> dict[str, object]:
+    return {
+        "is_success": 1,
+        "final_verdict": "success",
+        "success_reason": reason,
+        "failure_reason": None,
+        "failure_stage": None,
+        "failure_type": None,
+    }
+
+
+def _failure_patch(*, verdict: str, stage: str, failure_type: str, reason: str) -> dict[str, object]:
+    return {
+        "is_success": 0,
+        "final_verdict": verdict,
+        "success_reason": None,
+        "failure_reason": reason,
+        "failure_stage": stage,
+        "failure_type": failure_type,
+    }
 
 
 def route_after_ast(state: AgentState) -> GenerateRoute:
@@ -57,6 +104,8 @@ def route_after_execution(state: AgentState) -> GenerateRoute:
     """Route after execution sandbox."""
 
     if state.get("render_error"):
+        if _is_infra_failure(state, "execution"):
+            return "finish"
         if _should_force_end(state):
             return "finish"
         return "to_coder"
@@ -66,14 +115,86 @@ def route_after_execution(state: AgentState) -> GenerateRoute:
 def route_after_vision(state: AgentState) -> GenerateRoute:
     """Route after vision critic."""
 
-    vision_error = state.get("vision_error")
-    if _is_vision_passed(vision_error):
+    if _is_vision_passed(state):
         return "finish"
-    if _should_force_end(state) and _is_minor_vision_issue(vision_error):
+
+    if _is_infra_failure(state, "vision"):
         return "finish"
+
+    retry_count = _current_retry_count(state)
+    if retry_count >= 3 and _is_minor_vision_issue(state):
+        return "finish"
+
+    severity = str(state.get("vision_severity", "") or "").strip().lower()
+    issue_count = int(state.get("vision_issue_count", 0) or 0)
+    storyboard_present = bool(state.get("storyboard_present"))
+
+    if severity == "medium":
+        if storyboard_present and retry_count >= 3 and issue_count <= 4:
+            return "finish"
+        if retry_count >= 4 and issue_count <= 2:
+            return "finish"
+
     if _should_force_end(state):
         return "finish"
     return "to_coder"
+
+
+def verdict_node(state: AgentState) -> dict[str, Any]:
+    """Terminal node: compute final_verdict from accumulated state fields."""
+
+    if _is_vision_passed(state):
+        severity = str(state.get("vision_severity", "") or "").strip().lower()
+        if severity == "low":
+            return _success_patch("Accepted low-severity visual issue.")
+        return _success_patch("Vision review passed.")
+
+    if state.get("failure_type") == "infra":
+        stage = state.get("failure_stage") or "unknown"
+        reason = str(
+            state.get("failure_reason")
+            or state.get("render_error")
+            or state.get("vision_error")
+            or "Infrastructure failure."
+        )
+        return _failure_patch(verdict="infra_failure", stage=stage, failure_type="infra", reason=reason)
+
+    retry_count = _current_retry_count(state)
+    if retry_count >= 3 and _is_minor_vision_issue(state):
+        return _success_patch("Accepted low-severity visual issue after retries.")
+
+    severity = str(state.get("vision_severity", "") or "").strip().lower()
+    issue_count = int(state.get("vision_issue_count", 0) or 0)
+    storyboard_present = bool(state.get("storyboard_present"))
+
+    if severity == "medium":
+        if storyboard_present and retry_count >= 3 and issue_count <= 4:
+            return _success_patch("Accepted medium-severity visual issue with storyboard guidance.")
+        if retry_count >= 4 and issue_count <= 2:
+            return _success_patch("Accepted medium-severity visual issue after max retries.")
+
+    if state.get("vision_error"):
+        return _failure_patch(
+            verdict="content_failure", stage="vision", failure_type="content",
+            reason=str(state.get("vision_error") or "Vision review requested revision."),
+        )
+
+    if state.get("render_error"):
+        return _failure_patch(
+            verdict="content_failure", stage="execution", failure_type="content",
+            reason=str(state.get("render_error")),
+        )
+
+    if state.get("ast_error"):
+        return _failure_patch(
+            verdict="content_failure", stage="ast", failure_type="content",
+            reason=str(state.get("ast_error")),
+        )
+
+    return _failure_patch(
+        verdict="content_failure", stage="unknown", failure_type="unknown",
+        reason="Workflow ended without a definitive result.",
+    )
 
 
 def build_plan_graph() -> object:
@@ -95,6 +216,7 @@ def build_generate_graph() -> object:
     graph.add_node("ast_reviewer", ast_reviewer_node)
     graph.add_node("execution", execution_node)
     graph.add_node("vision_critic", vision_critic_node)
+    graph.add_node("verdict", verdict_node)
 
     graph.set_entry_point("coder")
     graph.add_edge("coder", "ast_reviewer")
@@ -105,7 +227,7 @@ def build_generate_graph() -> object:
         {
             "to_coder": "coder",
             "to_execution": "execution",
-            "finish": END,
+            "finish": "verdict",
         },
     )
 
@@ -115,7 +237,7 @@ def build_generate_graph() -> object:
         {
             "to_coder": "coder",
             "to_vision": "vision_critic",
-            "finish": END,
+            "finish": "verdict",
         },
     )
 
@@ -124,9 +246,11 @@ def build_generate_graph() -> object:
         route_after_vision,
         {
             "to_coder": "coder",
-            "finish": END,
+            "finish": "verdict",
         },
     )
+
+    graph.add_edge("verdict", END)
 
     return graph.compile()
 

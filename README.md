@@ -18,6 +18,12 @@
 - `Agent specialization`: planner, coder, AST reviewer, execution sandbox, and vision critic each focus on one stage.
 - `智能体分工明确`：规划、代码生成、静态检查、执行渲染、视觉评估各司其职。
 
+- `Sandboxed execution`: generated Manim code now runs in a Docker sandbox by default, with an explicit local opt-in path only for trusted development.
+- `默认沙箱执行`：生成的 Manim 代码默认在 Docker 沙箱中运行，本地直接执行仅在显式确认且信任代码时启用。
+
+- `Structured verdicts`: runs now distinguish `success`, `content_failure`, and `infra_failure` for clearer debugging and evaluation.
+- `结构化结果判定`：运行结果会区分 `success`、`content_failure` 和 `infra_failure`，更便于排查问题与做实验分析。
+
 - `Retry-controlled pipeline`: hard stop at `MAX_RETRIES = 5` to avoid endless loops.
 - `受控重试机制`：通过 `MAX_RETRIES = 5` 限制迭代次数，避免无限循环。
 
@@ -78,6 +84,9 @@ coder <- feedback <- ast_reviewer / execution / vision_critic
 - `Generation mode`: runs `coder -> ast_reviewer -> execution -> vision_critic`.
 - `Generation 模式`：运行 `coder -> ast_reviewer -> execution -> vision_critic` 闭环。
 
+- `Ours` strategy now requires valid storyboard JSON before code generation; if planning fails to produce it, the run is marked as a content failure instead of silently continuing.
+- `Ours` 策略现在要求在代码生成前先拿到有效的分镜 JSON；如果规划阶段未产出有效分镜，系统会直接判定为内容失败，而不是静默继续。
+
 - If no storyboard exists, the planner runs first and then enters the generation loop.
 - 如果没有现成分镜，系统会先规划，再进入生成与修复循环。
 
@@ -129,8 +138,10 @@ export QWEN_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
 Optional model overrides:
 
 ```bash
-export MANIM_PLANNER_MODEL=deepseek-chat
-export MANIM_CODER_MODEL=deepseek-chat
+export MANIM_PLANNER_MODEL=deepseek-v4-pro
+export MANIM_CODER_MODEL=deepseek-v4-pro
+# Optional: exact pro model id used when legacy deepseekv4flash/deepseekv4pro is encountered
+export DEEPSEEK_PRO_MODEL=deepseek-v4-pro
 export MANIM_VISION_MODEL=qwen-vl-max
 ```
 
@@ -139,7 +150,48 @@ Optional execution tuning:
 ```bash
 export MANIM_EXEC_TIMEOUT=120
 export MANIM_ERROR_LIMIT=1800
+export MANIM_SANDBOX_MODE=docker
+export MANIM_SANDBOX_IMAGE=manimcommunity/manim:stable
 ```
+
+If you intentionally want to run generated code outside Docker for trusted local development, opt in explicitly:
+
+```bash
+export MANIM_SANDBOX_MODE=local
+export MANIM_ALLOW_UNSANDBOXED=1
+```
+
+### Run experiments in Docker | 在 Docker 中运行实验
+
+`run_experiments.py` is intended to run inside a Docker-capable environment.
+
+Minimum requirements for experiment runs:
+
+- DeepSeek and Qwen API keys are injected into the container.
+- Hugging Face dataset access is available for `hf://` parquet reads.
+- Manim and FFmpeg are installed in the runtime image.
+- `media/` and `logs/` are writable.
+- Docker Desktop is running if you keep `MANIM_SANDBOX_MODE=docker`.
+
+Typical flow:
+
+```bash
+export DEEPSEEK_API_KEY="your_deepseek_api_key"
+export QWEN_API_KEY="your_qwen_api_key"
+export MANIM_SANDBOX_MODE=docker
+export RUNNING_IN_DOCKER=1
+python run_experiments.py
+```
+
+Experiment CSV output now distinguishes `success`, `content_failure`, and `infra_failure`, so Docker/runtime issues are separated from generation-quality issues.
+
+The exported CSV also records richer evaluation metadata, including:
+
+- `failure_stage` and `failure_type`
+- `success_reason` and `failure_reason`
+- `execution_environment` and `docker_context`
+- `vision_verdict`, `vision_severity`, and `vision_issue_count`
+- whether the planner/storyboard path was actually used
 
 ## Usage | 使用方式
 

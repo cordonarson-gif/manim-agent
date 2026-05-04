@@ -9,7 +9,11 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
 from state import AgentState
-from utils.model_provider import build_deepseek_chat_model
+from utils.model_provider import (
+    build_deepseek_chat_model,
+    get_planner_timeout_seconds,
+    invoke_with_hard_timeout,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -20,8 +24,17 @@ Output strictly one JSON array, without markdown and without extra text.
 Each item must contain:
 - scene_number: int
 - scene_slice: str
-- action: str
+- action: str (use only standard Manim methods: Create, FadeIn, FadeOut, Transform,
+  ReplacementTransform, Write, MoveAlongPath, TracedPath, Rotate, self.play, self.wait)
 - description: str
+
+Guidelines:
+- Keep total scenes <= 4 for reliable rendering.
+- Use only standard Manim Community Edition primitives (Text, Dot, Circle, Square,
+  Triangle, Rectangle, Arrow, Line, VGroup, TracedPath, etc.).
+- Never reference nonstandard APIs like TrailEffect, PathTracer, or TransformWithRotation.
+- For trail/path effects, describe using TracedPath with dissipating_time.
+- Prefer simple 2D layouts with explicit positioning (shift, next_to, buff).
 """.strip()
 
 
@@ -30,9 +43,10 @@ def _build_planner_llm() -> ChatOpenAI:
 
     return build_deepseek_chat_model(
         model_env_name="MANIM_PLANNER_MODEL",
-        default_model="deepseek-chat",
+        default_model="deepseek-v4-pro",
         temperature_env_name="MANIM_PLANNER_TEMPERATURE",
         default_temperature=0.1,
+        timeout_seconds=get_planner_timeout_seconds(),
     )
 
 
@@ -152,8 +166,13 @@ def planner_node(state: AgentState) -> dict[str, str | None]:
     )
 
     try:
+        LOGGER.info("Planner started for strategy=%s", state.get("strategy", "unknown"))
         llm = _build_planner_llm()
-        response = (prompt | llm).invoke({"task": task})
+        response = invoke_with_hard_timeout(
+            lambda: (prompt | llm).invoke({"task": task}),
+            timeout_seconds=get_planner_timeout_seconds() + 5,
+            timeout_label="planner model call",
+        )
         raw_text = _extract_text_content(response.content)
         cleaned_text = _strip_code_fence(raw_text)
         parsed = _try_parse_json_array(cleaned_text)
@@ -167,4 +186,3 @@ def planner_node(state: AgentState) -> dict[str, str | None]:
         LOGGER.exception("planner_node failed: %s", exc)
         fallback = _fallback_storyboard(task)
         return {"storyboard": json.dumps(fallback, ensure_ascii=False, indent=2)}
-

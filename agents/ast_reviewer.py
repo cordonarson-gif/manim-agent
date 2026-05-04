@@ -2,26 +2,76 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass, field
+from typing import Any
 
 from state import AgentState
 
 BLOCKED_IMPORTS: set[str] = {
+    "asyncio",
+    "builtins",
+    "ctypes",
+    "ftplib",
+    "glob",
+    "httpx",
+    "importlib",
+    "marshal",
+    "multiprocessing",
     "os",
+    "pathlib",
+    "pickle",
+    "requests",
+    "shutil",
+    "socket",
+    "ssl",
     "subprocess",
+    "sys",
+    "tempfile",
+    "threading",
+    "urllib",
 }
 
 BLOCKED_CALLS: set[str] = {
+    "__import__",
+    "compile",
+    "delattr",
+    "eval",
+    "exec",
+    "getattr",
+    "globals",
+    "input",
+    "locals",
+    "open",
+    "rmtree",
     "os.system",
     "os.popen",
+    "os.remove",
+    "os.unlink",
+    "setattr",
+    "shutil.rmtree",
     "subprocess.run",
     "subprocess.Popen",
     "subprocess.call",
     "subprocess.check_call",
     "subprocess.check_output",
-    "eval",
-    "exec",
-    "compile",
 }
+
+BLOCKED_CALL_SUFFIXES: tuple[str, ...] = (
+    ".read_text",
+    ".write_text",
+    ".read_bytes",
+    ".write_bytes",
+    ".open",
+    ".unlink",
+    ".rmdir",
+    ".mkdir",
+    ".rename",
+    ".glob",
+    ".rglob",
+    ".iterdir",
+    ".rmtree",
+)
+
+RUNTIME_ONLY_STRATEGY = "Runtime Only"
 
 
 def _resolve_call_name(node: ast.AST) -> str:
@@ -55,6 +105,9 @@ class _SafetyVisitor(ast.NodeVisitor):
         module = (node.module or "").split(".")[0]
         if module in BLOCKED_IMPORTS:
             self.blocked_imports.append(node.module or "")
+        full_module = node.module or ""
+        if full_module.startswith("manim.") and full_module != "manim":
+            self.blocked_imports.append(full_module)
         self.generic_visit(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
@@ -68,7 +121,12 @@ class _SafetyVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         call_name = _resolve_call_name(node.func)
-        if call_name in BLOCKED_CALLS or call_name.startswith("subprocess."):
+        if (
+            call_name in BLOCKED_CALLS
+            or call_name.startswith("subprocess.")
+            or call_name.startswith("os.")
+            or any(call_name.endswith(suffix) for suffix in BLOCKED_CALL_SUFFIXES)
+        ):
             self.blocked_calls.append(call_name)
         self.generic_visit(node)
 
@@ -82,11 +140,12 @@ def _format_syntax_error(error: SyntaxError) -> str:
     return f"SyntaxError at line {line}, column {col}: {msg}"
 
 
-def ast_reviewer_node(state: AgentState) -> dict[str, str | None]:
+def ast_reviewer_node(state: AgentState) -> dict[str, Any]:
     """Static review node for syntax, safety, and class contract."""
-    # 如果当前策略是纯运行时测试，直接跳过静态语法检查，放行给执行器
-    if state.get("strategy") == "Runtime Only":
+
+    if state.get("strategy") == RUNTIME_ONLY_STRATEGY:
         return {"ast_error": None, "ast_error_ratio": 0.0}
+
     try:
         code = str(state.get("code", ""))
     except Exception:
