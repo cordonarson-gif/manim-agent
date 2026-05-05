@@ -25,8 +25,47 @@ def _merge_state(runtime_state: AgentState, patch: dict[str, Any]) -> None:
         runtime_state[key] = value
 
 
-def _latest_artifact() -> Path | None:
-    """Return latest render artifact path (prefer mp4, fallback png)."""
+def _latest_artifact(state: AgentState) -> Path | None:
+    """Return current-run artifact path from state, with legacy fallback scan."""
+
+    for key in ("render_video_path", "render_image_path"):
+        value = state.get(key)
+        if isinstance(value, str) and value.strip():
+            candidate = Path(value)
+            if candidate.exists() and candidate.is_file():
+                return candidate
+
+    render_dir = state.get("render_media_dir")
+    if isinstance(render_dir, str) and render_dir.strip():
+        run_root = Path(render_dir)
+        if run_root.exists():
+            video = next(
+                iter(
+                    sorted(
+                        (
+                            p for p in run_root.rglob("*.mp4")
+                            if p.is_file() and "partial_movie_files" not in p.parts
+                        ),
+                        key=lambda p: p.stat().st_mtime,
+                        reverse=True,
+                    )
+                ),
+                None,
+            )
+            if video is not None:
+                return video
+            image = next(
+                iter(
+                    sorted(
+                        (p for p in run_root.rglob("*.png") if p.is_file()),
+                        key=lambda p: p.stat().st_mtime,
+                        reverse=True,
+                    )
+                ),
+                None,
+            )
+            if image is not None:
+                return image
 
     video_root = Path("media/videos")
     if video_root.exists():
@@ -154,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Workflow execution failed: {exc}")
         return 1
 
-    artifact = _latest_artifact()
+    artifact = _latest_artifact(final_state)
     print("\n=== Final State Summary ===")
     print(f"retry_count: {final_state.get('retry_count')}")
     print(f"retry_count_reason: {final_state.get('retry_count_reason')}")
