@@ -298,8 +298,8 @@ def _local_manim_command(
         *quality_args,
         "--disable_caching",
         "--media_dir",
-        str(media_dir),
-        str(source_file),
+        str(media_dir.resolve()),
+        str(source_file.name),
         SCENE_CLASS,
     ]
 

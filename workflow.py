@@ -107,11 +107,7 @@ def route_after_execution(state: AgentState) -> GenerateRoute:
     """Route after execution sandbox."""
 
     if state.get("render_error"):
-        if _is_infra_failure(state, "execution"):
-            return "finish"
-        if _should_force_end(state):
-            return "finish"
-        return "to_coder"
+        return "finish"
     return "to_vision"
 
 

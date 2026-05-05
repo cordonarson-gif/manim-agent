@@ -180,6 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         final_state.get("ast_error")
         or final_state.get("render_error")
         or final_state.get("vision_error")
+        or final_state.get("final_verdict") != "success"
     )
     return 1 if has_error else 0
 
