@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import argparse
 import logging
 import os
+import sys
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -10,7 +13,12 @@ if TYPE_CHECKING:
 
 from state import create_initial_state
 
-DATASET_PATH = "hf://datasets/SuienR/ManimBench-v1/manim_sft_dataset_test_v2.parquet"
+HF_DATASET_REPO_ID = "SuienR/ManimBench-v1"
+HF_DATASET_FILENAME = "manim_sft_dataset_test_v2.parquet"
+HF_DATASET_REPO_TYPE = "dataset"
+HF_DATASET_PATH = f"hf://datasets/{HF_DATASET_REPO_ID}/{HF_DATASET_FILENAME}"
+DEFAULT_LOCAL_DATASET_PATH = Path("data") / HF_DATASET_FILENAME
+DATASET_PATH_ENV = "MANIM_EXPERIMENT_DATASET_PATH"
 OUTPUT_CSV = "experiment_results_full.csv"
 STRATEGIES = ["Runtime Only", "Ours"]
 RUNTIME_ONLY_STRATEGY = "Runtime Only"
@@ -34,13 +42,102 @@ def _configure_cli_logging() -> None:
     )
 
 
+def _safe_text_env(name: str, default: str) -> str:
+    """Read non-empty text env var with fallback."""
+
+    raw = os.getenv(name, "").strip()
+    return raw or default
+
+
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse CLI arguments."""
+
+    parser = argparse.ArgumentParser(description="Run the configured ManimBench experiment slice.")
+    parser.add_argument(
+        "--dataset-path",
+        type=str,
+        default="",
+        help="Local parquet path or URI override for the experiment dataset.",
+    )
+    return parser.parse_args(argv)
+
+
+def _format_exception(exc: BaseException) -> str:
+    """Format one-line exception text for CLI output."""
+
+    message = str(exc).strip()
+    if not message:
+        return exc.__class__.__name__
+    return f"{exc.__class__.__name__}: {message}"
+
+
+def _read_parquet_source(source_kind: str, source_value: str, pd: Any) -> Any:
+    """Read one dataset source into a dataframe."""
+
+    if source_kind == "hf_hub_download":
+        from huggingface_hub import hf_hub_download
+
+        downloaded_path = hf_hub_download(
+            repo_id=HF_DATASET_REPO_ID,
+            filename=HF_DATASET_FILENAME,
+            repo_type=HF_DATASET_REPO_TYPE,
+        )
+        return pd.read_parquet(downloaded_path)
+
+    return pd.read_parquet(source_value)
+
+
+def _candidate_dataset_sources(cli_dataset_path: str) -> list[tuple[str, str, str]]:
+    """Build dataset source candidates in priority order."""
+
+    sources: list[tuple[str, str, str]] = []
+    if cli_dataset_path.strip():
+        sources.append(("CLI override", "path", cli_dataset_path.strip()))
+
+    env_dataset_path = os.getenv(DATASET_PATH_ENV, "").strip()
+    if env_dataset_path:
+        sources.append((f"env {DATASET_PATH_ENV}", "path", env_dataset_path))
+
+    local_dataset_path = Path(_safe_text_env("MANIM_EXPERIMENT_LOCAL_DATASET_PATH", str(DEFAULT_LOCAL_DATASET_PATH)))
+    if local_dataset_path.exists() and local_dataset_path.is_file():
+        sources.append(("local default", "path", str(local_dataset_path)))
+
+    sources.append(("Hugging Face download", "hf_hub_download", HF_DATASET_FILENAME))
+    sources.append(("legacy hf:// URI", "path", HF_DATASET_PATH))
+    return sources
+
+
+def _load_experiment_dataset(pd: Any, cli_dataset_path: str) -> Any:
+    """Load the experiment dataframe using explicit fallback order."""
+
+    failures: list[tuple[str, str]] = []
+    for label, source_kind, source_value in _candidate_dataset_sources(cli_dataset_path):
+        print(f"Reading dataset source: {label}")
+        try:
+            df = _read_parquet_source(source_kind, source_value, pd)
+            print(f"Dataset loaded successfully: {label}")
+            return df
+        except Exception as exc:
+            reason = _format_exception(exc)
+            failures.append((label, reason))
+            print(f"Dataset source failed: {label} | {reason}")
+
+    failure_lines = "\n".join(f"- {label}: {reason}" for label, reason in failures)
+    raise RuntimeError(
+        "Failed to load ManimBench dataset.\n"
+        f"Tried:\n{failure_lines}\n\n"
+        "To fix: place the parquet file at data/manim_sft_dataset_test_v2.parquet, "
+        "or run with --dataset-path /absolute/path/to/manim_sft_dataset_test_v2.parquet, "
+        f"or set {DATASET_PATH_ENV}=/absolute/path/to/manim_sft_dataset_test_v2.parquet."
+    )
+
+
 def _merge_state(runtime_state: dict[str, Any], patch: dict[str, Any] | None) -> dict[str, Any]:
     """Merge graph output back into the working state."""
 
     if isinstance(patch, dict):
         runtime_state.update(patch)
     return runtime_state
-
 
 def _normalize_optional_text(value: Any) -> str | None:
     """Normalize optional error text for consistent success checks."""
@@ -113,15 +210,20 @@ def _run_strategy(task: str, strategy: str) -> dict[str, Any]:
     return runtime_state
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Run the configured ManimBench experiment slice."""
 
     import pandas as pd
 
+    args = _parse_args(argv or sys.argv[1:])
     _configure_cli_logging()
     print("📦 正在读取 ManimBench 测试集...")
-    df = pd.read_parquet(DATASET_PATH)
-    df_test = _select_test_rows(df)
+    try:
+        df = _load_experiment_dataset(pd, args.dataset_path)
+        df_test = _select_test_rows(df)
+    except Exception as exc:
+        print(f"Experiment startup failed: {_format_exception(exc)}")
+        return 1
     strategies = _enabled_strategies()
 
     experiment_results: list[dict[str, Any]] = []

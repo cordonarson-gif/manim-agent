@@ -1,130 +1,67 @@
 # manim-agent
 
-> Multi-agent dual-feedback pipeline for automated Manim teaching content generation.  
-> 面向 Manim 教学动画自动生成的多智能体双反馈系统。
+Multi-agent dual-feedback workflow for generating Manim teaching animations from natural-language prompts.
 
-`manim-agent` is a LangGraph-based workflow that turns natural-language teaching requests into storyboard plans, Manim code, rendered media, and visual feedback-driven revisions. It is designed for educational animation generation with a closed repair loop across code review and vision review.
+> From task -> storyboard -> code -> render -> vision review -> repair loop.
 
-`manim-agent` 是一个基于 LangGraph 的多智能体工作流，能够将自然语言教学需求转换为分镜规划、Manim 代码、渲染结果，并通过代码审查与视觉审查闭环迭代修复，更适合教学动画生成场景。
+## Why this project
 
-## Highlights | 项目亮点
+`manim-agent` explores how far a structured multi-agent workflow can push reliable educational animation generation with Manim. Instead of relying on a single model pass, it combines planning, code generation, static checks, sandboxed rendering, and visual critique to iteratively repair outputs.
 
-- `Dual feedback loop`: combines AST/static review and visual critique to improve generation reliability.
-- `双反馈闭环`：同时利用 AST 静态审查和视觉审查，提高动画生成的可执行性与可用性。
+This repository is useful if you want to:
 
-- `Planner-first workflow`: supports planning-only mode and end-to-end generation mode.
-- `规划优先工作流`：同时支持仅输出分镜的 Planning 模式与完整生成的 Generation 模式。
+- generate Manim teaching animations from plain-language instructions
+- compare planner-guided generation against runtime-only generation
+- study a LangGraph-based agent workflow with explicit state transitions
+- benchmark content failures separately from infrastructure failures
 
-- `Agent specialization`: planner, coder, AST reviewer, execution sandbox, and vision critic each focus on one stage.
-- `智能体分工明确`：规划、代码生成、静态检查、执行渲染、视觉评估各司其职。
+## Key features
 
-- `Sandboxed execution`: generated Manim code now runs in a Docker sandbox by default, with an explicit local opt-in path only for trusted development.
-- `默认沙箱执行`：生成的 Manim 代码默认在 Docker 沙箱中运行，本地直接执行仅在显式确认且信任代码时启用。
+- **Planner-first generation**: can create storyboard JSON before code generation
+- **Dual feedback loop**: combines AST/static review and vision-based critique
+- **Docker-first sandboxing**: generated Manim code runs in Docker by default
+- **Structured verdicts**: distinguishes `success`, `content_failure`, and `infra_failure`
+- **Experiment runner**: exports richer CSV metadata for evaluation and comparison
+- **Two interfaces**: CLI mode and Chainlit web UI
 
-- `Structured verdicts`: runs now distinguish `success`, `content_failure`, and `infra_failure` for clearer debugging and evaluation.
-- `结构化结果判定`：运行结果会区分 `success`、`content_failure` 和 `infra_failure`，更便于排查问题与做实验分析。
-
-- `Retry-controlled pipeline`: hard stop at `MAX_RETRIES = 5` to avoid endless loops.
-- `受控重试机制`：通过 `MAX_RETRIES = 5` 限制迭代次数，避免无限循环。
-
-- `Usable interfaces`: supports both CLI usage and Chainlit web interaction.
-- `可直接使用`：同时提供命令行入口和 Chainlit 交互界面。
-
-## Workflow | 工作流
-
-### Agent roles | 智能体角色
-
-- `planner`: converts a teaching request into storyboard JSON.
-- `planner`：将教学需求拆解为分镜 JSON。
-
-- `coder`: generates or repairs Manim code from the task, storyboard, and feedback.
-- `coder`：根据任务、分镜和反馈生成或修复 Manim 代码。
-
-- `ast_reviewer`: checks syntax, safety rules, and `GeneratedScene` contract.
-- `ast_reviewer`：检查语法、安全限制以及 `GeneratedScene` 约束。
-
-- `execution`: renders snapshots and videos in an isolated run directory.
-- `execution`：在独立运行目录中完成截图和视频渲染。
-
-- `vision_critic`: reviews the rendered frame and returns visual/layout feedback.
-- `vision_critic`：分析渲染图像并返回视觉与布局反馈。
-
-### Architecture
+## How it works
 
 ```text
-User Task
-   |
-   v
-planner (optional, planning mode)
-   |
-   v
-coder
-   |
-   v
-ast_reviewer
-   | pass
-   v
-execution
-   | pass
-   v
-vision_critic
-   | pass
-   v
-finish
+User task
+  -> planner (optional)
+  -> coder
+  -> ast_reviewer
+  -> execution
+  -> vision_critic
+  -> verdict
 
-If AST / render / vision review fails:
-coder <- feedback <- ast_reviewer / execution / vision_critic
+Failures feed back into coder until accepted or retry budget is exhausted.
 ```
 
-### Core modes | 核心模式
+### Main agents
 
-- `Planning mode`: runs `planner` only and outputs storyboard JSON.
-- `Planning 模式`：仅运行 `planner`，输出分镜 JSON。
+- **planner**: turns a request into storyboard JSON
+- **coder**: generates or repairs Manim code
+- **ast_reviewer**: blocks unsafe or invalid code patterns
+- **execution**: renders snapshots/videos in an isolated workspace
+- **vision_critic**: checks semantic alignment and layout quality
 
-- `Generation mode`: runs `coder -> ast_reviewer -> execution -> vision_critic`.
-- `Generation 模式`：运行 `coder -> ast_reviewer -> execution -> vision_critic` 闭环。
+## Quick start
 
-- `Ours` strategy now requires valid storyboard JSON before code generation; if planning fails to produce it, the run is marked as a content failure instead of silently continuing.
-- `Ours` 策略现在要求在代码生成前先拿到有效的分镜 JSON；如果规划阶段未产出有效分镜，系统会直接判定为内容失败，而不是静默继续。
-
-- If no storyboard exists, the planner runs first and then enters the generation loop.
-- 如果没有现成分镜，系统会先规划，再进入生成与修复循环。
-
-## Quick Start | 快速开始
-
-### Clone | 下载
+### 1. Clone
 
 ```bash
 git clone https://github.com/cordonarson-gif/manim-agent.git
 cd manim-agent
 ```
 
-You can also use `Code -> Download ZIP` on the GitHub repository page.  
-也可以在 GitHub 仓库页面使用 `Code -> Download ZIP` 直接下载。
-
-### Requirements | 环境要求
-
-- Python 3.10+
-- Manim Community Edition 0.19+
-- FFmpeg available in `PATH`
-- API access for DeepSeek chat and Qwen vision models
-
-### Install | 安装
+### 2. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Configuration | 环境变量配置
-
-Windows PowerShell:
-
-```powershell
-$env:DEEPSEEK_API_KEY="your_deepseek_api_key"
-$env:DEEPSEEK_BASE_URL="https://api.deepseek.com/v1"
-$env:QWEN_API_KEY="your_qwen_api_key"
-$env:QWEN_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
-```
+### 3. Configure model access
 
 macOS / Linux:
 
@@ -135,65 +72,32 @@ export QWEN_API_KEY="your_qwen_api_key"
 export QWEN_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
 ```
 
-Optional model overrides:
+Windows PowerShell:
 
-```bash
-export MANIM_PLANNER_MODEL=deepseek-v4-pro
-export MANIM_CODER_MODEL=deepseek-v4-pro
-# Optional: exact pro model id used when legacy deepseekv4flash/deepseekv4pro is encountered
-export DEEPSEEK_PRO_MODEL=deepseek-v4-pro
-export MANIM_VISION_MODEL=qwen-vl-max
+```powershell
+$env:DEEPSEEK_API_KEY="your_deepseek_api_key"
+$env:DEEPSEEK_BASE_URL="https://api.deepseek.com/v1"
+$env:QWEN_API_KEY="your_qwen_api_key"
+$env:QWEN_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
 ```
 
-Optional execution tuning:
+### 4. Choose execution mode
+
+Recommended default:
 
 ```bash
-export MANIM_EXEC_TIMEOUT=120
-export MANIM_ERROR_LIMIT=1800
 export MANIM_SANDBOX_MODE=docker
 export MANIM_SANDBOX_IMAGE=manimcommunity/manim:stable
 ```
 
-If you intentionally want to run generated code outside Docker for trusted local development, opt in explicitly:
+Trusted local-only fallback:
 
 ```bash
 export MANIM_SANDBOX_MODE=local
 export MANIM_ALLOW_UNSANDBOXED=1
 ```
 
-### Run experiments in Docker | 在 Docker 中运行实验
-
-`run_experiments.py` is intended to run inside a Docker-capable environment.
-
-Minimum requirements for experiment runs:
-
-- DeepSeek and Qwen API keys are injected into the container.
-- Hugging Face dataset access is available for `hf://` parquet reads.
-- Manim and FFmpeg are installed in the runtime image.
-- `media/` and `logs/` are writable.
-- Docker Desktop is running if you keep `MANIM_SANDBOX_MODE=docker`.
-
-Typical flow:
-
-```bash
-export DEEPSEEK_API_KEY="your_deepseek_api_key"
-export QWEN_API_KEY="your_qwen_api_key"
-export MANIM_SANDBOX_MODE=docker
-export RUNNING_IN_DOCKER=1
-python run_experiments.py
-```
-
-Experiment CSV output now distinguishes `success`, `content_failure`, and `infra_failure`, so Docker/runtime issues are separated from generation-quality issues.
-
-The exported CSV also records richer evaluation metadata, including:
-
-- `failure_stage` and `failure_type`
-- `success_reason` and `failure_reason`
-- `execution_environment` and `docker_context`
-- `vision_verdict`, `vision_severity`, and `vision_issue_count`
-- whether the planner/storyboard path was actually used
-
-## Usage | 使用方式
+## Usage
 
 ### CLI
 
@@ -204,7 +108,7 @@ python main.py --task "Explain how a triangle transforms into a square"
 Quiet mode:
 
 ```bash
-python main.py --task "Explain Pythagorean theorem visually" --quiet
+python main.py --task "Explain the Pythagorean theorem visually" --quiet
 ```
 
 ### Chainlit UI
@@ -213,59 +117,100 @@ python main.py --task "Explain Pythagorean theorem visually" --quiet
 chainlit run app.py
 ```
 
-For long rendering sessions, avoid watch mode because temporary file changes may trigger reloads unexpectedly.  
-对于长时间渲染任务，建议避免 watch 模式，因为临时文件变化可能触发热重载。
+## Experiments
 
-## Project Structure | 项目结构
+Run the benchmark driver:
+
+```bash
+export MANIM_SANDBOX_MODE=docker
+export RUNNING_IN_DOCKER=1
+python run_experiments.py
+```
+
+Preferred server workflow: place the parquet file locally first so experiment startup does not depend on `hf://` access.
+
+```bash
+mkdir -p data
+# put manim_sft_dataset_test_v2.parquet at:
+# data/manim_sft_dataset_test_v2.parquet
+python run_experiments.py
+```
+
+You can also override the dataset source explicitly:
+
+```bash
+python run_experiments.py --dataset-path /absolute/path/to/manim_sft_dataset_test_v2.parquet
+```
+
+```bash
+export MANIM_EXPERIMENT_DATASET_PATH=/absolute/path/to/manim_sft_dataset_test_v2.parquet
+python run_experiments.py
+```
+
+If no local file is available, the runner falls back to Hugging Face download and then the legacy `hf://` parquet URI.
+
+The experiment CSV includes:
+
+- final verdict
+- failure stage / failure type
+- success and failure reasons
+- execution environment / docker context
+- vision verdict / severity / issue count
+- whether storyboard planning was actually used
+
+## Repository structure
 
 ```text
 .
+|-- agents/
+|-- utils/
 |-- app.py
 |-- main.py
-|-- workflow.py
+|-- run_experiments.py
 |-- state.py
-|-- requirements.txt
-|-- agents/
-|   |-- planner.py
-|   |-- coder.py
-|   |-- ast_reviewer.py
-|   |-- execution.py
-|   `-- vision_critic.py
-`-- utils/
-    |-- experiment_logger.py
-    |-- manim_injector.py
-    `-- model_provider.py
+`-- workflow.py
 ```
 
-## Outputs | 输出结果
+## Current repository status
 
-- Render artifacts: `media/runs`
-- Snapshot or video outputs may also appear in `media/images` and `media/videos`
-- Experiment logs: `logs/runs/*.jsonl`
+At the moment this repository includes:
 
-These folders are runtime artifacts and are normally excluded from version control.  
-这些目录属于运行产物，通常不会纳入 Git 版本管理。
+- runnable source code
+- CLI and Chainlit entrypoints
+- experiment runner and logging
 
-## Tech Stack
+It does **not** yet include:
 
-- LangGraph
-- LangChain
-- ChatOpenAI-compatible model clients
-- Manim Community Edition
-- Chainlit
+- a published Python package configuration (`pyproject.toml`)
+- GitHub Actions for release automation
+- a LICENSE file
+- container publishing configuration for GitHub Packages
 
-## Notes | 说明
+## Suggested GitHub Releases
 
-- Hardcoded API keys have been removed before publishing.
-- 仓库公开前已经移除了硬编码 API Key。
+For now, use Releases to publish:
 
-- Keep credentials in environment variables instead of source files.
-- 建议将模型密钥保存在环境变量中，而不是源码中。
+- source snapshots (`zip` / `tar.gz` generated by GitHub)
+- optional benchmark CSV outputs
+- optional demo videos or screenshots
+- release notes summarizing workflow and evaluation changes
 
-- Some local runtime outputs are intentionally ignored by `.gitignore`.
-- 一些本地产生的运行结果已经通过 `.gitignore` 排除。
+## Suggested GitHub Packages
+
+This repo is **not package-ready yet**. The cleanest future options are:
+
+1. **Python package** on GitHub Packages / PyPI after adding `pyproject.toml`
+2. **Docker image** on GitHub Container Registry for the sandbox/runtime environment
+
+If you want, the next step can be adding either:
+
+- a minimal `pyproject.toml` for Python packaging, or
+- a `Dockerfile` plus GitHub Actions workflow for publishing images
+
+## Security note
+
+Keep API keys in environment variables, not in source files or committed config.
 
 ## License
 
-No license file is included yet. Add one before wider open-source distribution if needed.  
-当前仓库暂未附带许可证文件，如计划公开分发，建议补充 `LICENSE`。
+No license file is included yet. Add one before broader public distribution.
