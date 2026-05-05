@@ -93,7 +93,10 @@ def _failure_patch(*, verdict: str, stage: str, failure_type: str, reason: str) 
 def route_after_ast(state: AgentState) -> GenerateRoute:
     """Route after AST review."""
 
-    if state.get("ast_error"):
+    ast_error = str(state.get("ast_error") or "").strip()
+    if ast_error:
+        if ast_error == "Generated code is empty.":
+            return "finish"
         if _should_force_end(state):
             return "finish"
         return "to_coder"

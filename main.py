@@ -9,9 +9,10 @@ from typing import Any
 from state import AgentState, create_initial_state
 
 try:
-    from workflow import generate_app
+    from workflow import generate_app, plan_only_app
 except Exception as exc:  # pragma: no cover - runtime dependency guard.
     generate_app = None
+    plan_only_app = None
     _WORKFLOW_IMPORT_ERROR = exc
 else:
     _WORKFLOW_IMPORT_ERROR = None
@@ -88,12 +89,22 @@ def _print_node_update(node_name: str, update: dict[str, Any]) -> None:
 
 
 def run_workflow(task: str, quiet: bool = False) -> AgentState:
-    """Execute the full dual-feedback workflow and return the final state snapshot."""
+    """Execute planning + generation workflow and return the final state snapshot."""
 
-    if generate_app is None:
+    if generate_app is None or plan_only_app is None:
         raise RuntimeError(f"Failed to import workflow: {_WORKFLOW_IMPORT_ERROR}")
 
     state: AgentState = create_initial_state(task)
+
+    storyboard = state.get("storyboard")
+    if not isinstance(storyboard, str) or not storyboard.strip():
+        for event in plan_only_app.stream(state):
+            for node_name, node_update in event.items():
+                if isinstance(node_update, dict):
+                    _merge_state(state, node_update)
+                if not quiet and isinstance(node_update, dict):
+                    _print_node_update(node_name, node_update)
+
     for event in generate_app.stream(state):
         for node_name, node_update in event.items():
             if isinstance(node_update, dict):

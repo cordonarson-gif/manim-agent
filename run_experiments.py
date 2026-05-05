@@ -11,11 +11,11 @@ if TYPE_CHECKING:
 from state import create_initial_state
 
 DATASET_PATH = "hf://datasets/SuienR/ManimBench-v1/manim_sft_dataset_test_v2.parquet"
-OUTPUT_CSV = "experiment_results_mini.csv"
+OUTPUT_CSV = "experiment_results_full.csv"
 STRATEGIES = ["Runtime Only", "Ours"]
 RUNTIME_ONLY_STRATEGY = "Runtime Only"
 OURS_STRATEGY = "Ours"
-SELECTED_TASK_IDS = [72, 89]
+SELECTED_TASK_IDS: list[int] = []
 RANDOM_SAMPLE_SIZE = 2
 RANDOM_STATE = 42
 MAX_API_RETRIES = 3
@@ -69,7 +69,7 @@ def _select_test_rows(df: "pd.DataFrame") -> "pd.DataFrame":
             raise ValueError("Configured task ids are not present in the dataset.")
         return df.loc[available_ids]
 
-    return df.sample(n=RANDOM_SAMPLE_SIZE, random_state=RANDOM_STATE)
+    return df.sort_index()
 
 
 def _has_valid_storyboard(value: Any) -> bool:
